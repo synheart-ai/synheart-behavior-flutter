@@ -26,6 +26,11 @@ class NotificationCollector(private var config: BehaviorConfig) {
     private val notificationIgnoredThresholdMs = 30000L // 30 seconds
     // Track pending delayed tasks so we can cancel them if notification is opened
     private val pendingIgnoredTasks = mutableMapOf<String, Runnable>() // notificationId -> Runnable
+    // notificationId -> posting package, so the later "opened" / "ignored"
+    // event can name the same app the "received" event did. The click arrives
+    // through a different service callback and the ignore fires from a delayed
+    // Runnable, so neither still has the posting notification in hand.
+    private val notificationPackages = mutableMapOf<String, String>()
 
     fun setEventHandler(handler: (BehaviorEvent) -> Unit) {
         this.eventHandler = handler
@@ -37,6 +42,29 @@ class NotificationCollector(private var config: BehaviorConfig) {
 
     private fun getIsoTimestamp(): String {
         return Instant.now().toString()
+    }
+
+    /**
+     * Build the metrics map for one interruption event.
+     *
+     * `source_app` is what the engine reads as `NotificationReceived
+     * { source_app_id }`. Without it the engine sees that an interruption
+     * happened but cannot attribute it — no app identity, and therefore no
+     * context row for the interruption. It was being dropped here even though
+     * the posting package was already in scope.
+     *
+     * Omitted rather than sent empty when the package is unknown: a missing key
+     * reads as absent, whereas `""` would resolve to an app id matching
+     * nothing, whose interpretation-mask row is all zeros.
+     */
+    private fun interruptionMetrics(
+            action: String,
+            isCall: Boolean,
+            packageName: String?
+    ): Map<String, Any> = buildMap {
+        put("action", action)
+        put("source", if (isCall) "notification_call" else "notification")
+        packageName?.takeIf { it.isNotBlank() }?.let { put("source_app", it) }
     }
 
     /**
@@ -87,6 +115,9 @@ class NotificationCollector(private var config: BehaviorConfig) {
 
             // Update package tracking
             packageName?.let { recentNotificationPackages[it] = now }
+            // Remember the posting app for this id so the "opened" click and
+            // the delayed "ignored" task can attribute the same source_app.
+            packageName?.takeIf { it.isNotBlank() }?.let { notificationPackages[id] = it }
 
             android.util.Log.d("NotificationCollector", "Step 1: Getting timestamp")
             receivedNotificationTimestamps[id] = now
@@ -110,10 +141,7 @@ class NotificationCollector(private var config: BehaviorConfig) {
                                 sessionId = "current",
                                 timestamp = getIsoTimestamp(),
                                 eventType = if (isCall) "call" else "notification",
-                                metrics = mapOf(
-                                        "action" to if (isCall) "ignored" else "ignored",
-                                        "source" to if (isCall) "notification_call" else "notification"
-                                )
+                                metrics = interruptionMetrics("ignored", isCall, notificationPackages[id])
                         )
                 )
                     } else {
@@ -129,7 +157,10 @@ class NotificationCollector(private var config: BehaviorConfig) {
             // Keep only last 100 notifications
             if (receivedNotificationTimestamps.size > 100) {
                 val oldest = receivedNotificationTimestamps.minByOrNull { it.value }?.key
-                oldest?.let { receivedNotificationTimestamps.remove(it) }
+                oldest?.let {
+                    receivedNotificationTimestamps.remove(it)
+                    notificationPackages.remove(it)
+                }
             }
 
             android.util.Log.d("NotificationCollector", "Step 3: Creating event")
@@ -139,10 +170,7 @@ class NotificationCollector(private var config: BehaviorConfig) {
                             sessionId = "current",
                             timestamp = getIsoTimestamp(),
                             eventType = eventType,
-                            metrics = mapOf(
-                                    "action" to if (isCall) "ignored" else "received",
-                                    "source" to if (isCall) "notification_call" else "notification"
-                            )
+                            metrics = interruptionMetrics(if (isCall) "ignored" else "received", isCall, packageName)
                     )
 
             android.util.Log.d(
@@ -191,10 +219,7 @@ class NotificationCollector(private var config: BehaviorConfig) {
                                 sessionId = "current",
                                 timestamp = getIsoTimestamp(),
                                 eventType = if (isCall) "call" else "notification",
-                                metrics = mapOf(
-                                        "action" to if (isCall) "ignored" else "ignored",
-                                        "source" to if (isCall) "notification_call" else "notification"
-                                )
+                                metrics = interruptionMetrics("ignored", isCall, notificationPackages[id])
                         )
                 )
             } else {
@@ -210,8 +235,19 @@ class NotificationCollector(private var config: BehaviorConfig) {
      * Called when a notification is opened/tapped. This should be called from
      * NotificationListenerService.onNotificationRemoved when the removal reason is REASON_CLICK.
      */
-    fun onNotificationOpened(notificationId: String? = null, isCall: Boolean = false) {
+    fun onNotificationOpened(
+            notificationId: String? = null,
+            packageName: String? = null,
+            isCall: Boolean = false
+    ) {
         if (!config.enableAttentionSignals) return
+
+        // Prefer the package the caller has in hand; fall back to what the
+        // matching "received" event recorded. Either can be missing — a click
+        // on a notification posted before this collector started has neither.
+        val resolvedPackage =
+                packageName?.takeIf { it.isNotBlank() }
+                        ?: notificationId?.let { notificationPackages[it] }
 
         val now = System.currentTimeMillis()
         openedNotificationTimestamps.add(now)
@@ -225,6 +261,7 @@ class NotificationCollector(private var config: BehaviorConfig) {
         notificationId?.let { id ->
             // Remove from received list
             receivedNotificationTimestamps.remove(id)
+            notificationPackages.remove(id)
 
             // Cancel the delayed "ignored" task if it exists
             pendingIgnoredTasks[id]?.let { task ->
@@ -247,10 +284,7 @@ class NotificationCollector(private var config: BehaviorConfig) {
                         sessionId = "current",
                         timestamp = getIsoTimestamp(),
                         eventType = if (isCall) "call" else "notification",
-                        metrics = mapOf(
-                                "action" to if (isCall) "answered" else "opened",
-                                "source" to if (isCall) "notification_call" else "notification"
-                        )
+                        metrics = interruptionMetrics(if (isCall) "answered" else "opened", isCall, resolvedPackage)
                 )
         )
     }
@@ -260,6 +294,7 @@ class NotificationCollector(private var config: BehaviorConfig) {
         pendingIgnoredTasks.values.forEach { task -> handler.removeCallbacks(task) }
         receivedNotificationTimestamps.clear()
         recentNotificationPackages.clear()
+        notificationPackages.clear()
         openedNotificationTimestamps.clear()
         pendingIgnoredTasks.clear()
     }
@@ -439,7 +474,11 @@ class SynheartNotificationListenerService : NotificationListenerService() {
                     )
                 } else {
                     collectors.forEach { collector ->
-                        collector.onNotificationOpened(notificationId, isCall = isCall)
+                        collector.onNotificationOpened(
+                                notificationId,
+                                sbn.packageName,
+                                isCall
+                        )
                     }
                 }
             }

@@ -1,0 +1,47 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Notification-listener registration for the interruption signals.
+
+        `NotificationCollector` and `SynheartNotificationListenerService` have
+        always been written and working — they were simply never registered, so
+        Android never bound the service and the collector was dead code in every
+        host. `NotificationReceived` therefore reached the engine with
+        `action: None` on Android, the one platform that can actually observe
+        the response (`REASON_CLICK`). This block is that registration.
+
+        Declaring it here rather than in each host's manifest is deliberate: a
+        host that adds this plugin has opted into behavioural sensing, and
+        requiring every one of them to copy a block is what produced the gap in
+        the first place.
+
+        The service is inert until the person grants notification access in
+        system settings, which no app can do on its own — the declaration only
+        makes the app appear in that settings list. `android:permission` is what
+        guarantees only the system can bind it.
+
+        To keep it out of a merged manifest, a host adds to its own:
+
+            <service android:name="ai.synheart.behavior.SynheartNotificationListenerService"
+                     tools:node="remove" />
+
+        Note that Play Store policy requires a declared use for
+        BIND_NOTIFICATION_LISTENER_SERVICE, and that obligation sits with the
+        host app regardless of which manifest the block lives in.
+    -->
+    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" />
+
+    <!-- CallCollector reads call state to emit `call` interruption events. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
+    <application>
+        <service
+            android:name="ai.synheart.behavior.SynheartNotificationListenerService"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>
