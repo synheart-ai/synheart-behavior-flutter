@@ -163,36 +163,43 @@ class NotificationCollector(private var config: BehaviorConfig) {
                 }
             }
 
-            android.util.Log.d("NotificationCollector", "Step 3: Creating event")
-            val eventType = if (isCall) "call" else "notification"
-            val event =
-                    BehaviorEvent(
-                            sessionId = "current",
-                            timestamp = getIsoTimestamp(),
-                            eventType = eventType,
-                            metrics = interruptionMetrics(if (isCall) "ignored" else "received", isCall, packageName)
-                    )
-
-            android.util.Log.d(
-                    "NotificationCollector",
-                    "Step 4: Event created, eventHandler null: ${eventHandler == null}"
-            )
-
-            if (eventHandler == null) {
-                android.util.Log.e(
+            // A call emits ONE event, at its outcome: `answered` from
+            // onNotificationOpened, or `ignored` from the task scheduled below.
+            // It used to emit here too, labelled `ignored` at the moment it
+            // started ringing, so every unanswered call reached the engine as
+            // two calls, and an answered one as an ignored call plus an
+            // answered one. Same contract as the iOS CallCollector. A
+            // notification still reports its arrival here (`received`) and
+            // its outcome later; the host pairs the two.
+            if (isCall) {
+                android.util.Log.i(
                         "NotificationCollector",
-                        "ERROR: eventHandler is NULL! Event will not be emitted."
+                        "CALL_COUNT: ringing package=$packageName (event on outcome)"
                 )
             } else {
-                android.util.Log.d("NotificationCollector", "Step 5: Calling eventHandler")
-                eventHandler?.invoke(event)
-                // Grep-friendly: NOTIFICATION_COUNT shows when we actually count a notification
-                if (isCall) {
-                    android.util.Log.i(
+                android.util.Log.d("NotificationCollector", "Step 3: Creating event")
+                val event =
+                        BehaviorEvent(
+                                sessionId = "current",
+                                timestamp = getIsoTimestamp(),
+                                eventType = "notification",
+                                metrics = interruptionMetrics("received", false, packageName)
+                        )
+
+                android.util.Log.d(
+                        "NotificationCollector",
+                        "Step 4: Event created, eventHandler null: ${eventHandler == null}"
+                )
+
+                if (eventHandler == null) {
+                    android.util.Log.e(
                             "NotificationCollector",
-                            "CALL_COUNT: +1 received package=$packageName"
+                            "ERROR: eventHandler is NULL! Event will not be emitted."
                     )
                 } else {
+                    android.util.Log.d("NotificationCollector", "Step 5: Calling eventHandler")
+                    eventHandler?.invoke(event)
+                    // Grep-friendly: NOTIFICATION_COUNT shows when we actually count a notification
                     android.util.Log.i(
                             "NotificationCollector",
                             "NOTIFICATION_COUNT: +1 received package=$packageName"
