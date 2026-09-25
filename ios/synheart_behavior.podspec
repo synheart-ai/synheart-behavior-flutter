@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'synheart_behavior'
-  s.version          = '0.3.0'
+  s.version          = '0.4.1'
   s.summary          = 'A lightweight, privacy-preserving mobile SDK for behavioral signal collection'
   s.description      = <<-DESC
 The Synheart Behavioral SDK collects digital behavioral signals from smartphones without collecting any text, content, or PII - only timing-based signals.
