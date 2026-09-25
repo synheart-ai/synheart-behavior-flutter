@@ -17,6 +17,11 @@ import java.util.concurrent.ConcurrentLinkedQueue
 class MotionSignalCollector(private val context: Context, private var config: BehaviorConfig) :
         SensorEventListener {
 
+    companion object {
+        /** 20 000 µs = 50 Hz. Units are microseconds, not milliseconds. */
+        private const val ACCEL_SAMPLING_PERIOD_US = 20_000
+    }
+
     private var sensorManager: SensorManager? = null
     private var accelerometerSensor: Sensor? = null
 
@@ -93,9 +98,26 @@ class MotionSignalCollector(private val context: Context, private var config: Be
             return
         }
 
-        // ~50 Hz — matches the Synheart Runtime's default.
-        val samplingRate = SensorManager.SENSOR_DELAY_NORMAL
-        sensorManager?.registerListener(this, accelerometerSensor, samplingRate)
+        // 50 Hz, requested as an explicit period rather than a SENSOR_DELAY_*
+        // constant.
+        //
+        // This used to pass SENSOR_DELAY_NORMAL, which is ~200 ms (~5 Hz) — an
+        // order of magnitude below what this class's own doc claims, and below
+        // what iOS delivers (accelerometerUpdateInterval = 0.02). The two
+        // platforms were feeding the same heads accelerometer streams that
+        // differed 10x in rate, which is not a difference any downstream
+        // consumer can see or correct for.
+        //
+        // SENSOR_DELAY_GAME also lands near 50 Hz, but the named constants are
+        // hints whose real periods vary by OEM. An explicit period says what we
+        // mean. The platform still delivers at whatever rate the sensor
+        // supports at or faster than this, so treat it as a request, not a
+        // guarantee.
+        sensorManager?.registerListener(
+                this,
+                accelerometerSensor,
+                ACCEL_SAMPLING_PERIOD_US
+        )
 
         isCollecting = true
         android.util.Log.d("MotionSignalCollector", "Started collecting motion data")
