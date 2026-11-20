@@ -6,6 +6,10 @@ on:
     pull_request:
         branches: [main, dev]
 
+# Read-only token: publishing uses its own secrets, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
     test:
         name: Test & Analyze
