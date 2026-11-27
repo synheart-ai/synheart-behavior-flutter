@@ -1,10 +1,21 @@
 version: 2
+
 updates:
-  - package-ecosystem: "github-actions"
+  - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: weekly
+      day: saturday
+      time: "10:00"
+      timezone: Africa/Addis_Ababa
     open-pull-requests-limit: 5
     labels:
-      - "dependencies"
-      - "ci"
+      - dependencies
+      - ci
+    groups:
+      dependency-updates:
+        patterns: ["*"]
+    ignore:
+      # Keep major upgrades separate for manual review.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
